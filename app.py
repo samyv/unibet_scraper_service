@@ -27,7 +27,7 @@ app = Flask(__name__)
 app.json_encoder = EventEncoder
 
 ##PATHS
-LEAGUE_AMOUNT = 5
+LEAGUE_AMOUNT = -1
 CHROMEDRIVER_PATH = r"chromedriver.exe"
 os.environ['PATH'] += CHROMEDRIVER_PATH
 UNITBET_PATH_F = r"resources/sport_paths.json"
@@ -85,6 +85,9 @@ def print_error(text):
 def get_all_leagues_data():
     list_div = driver.find_element_by_xpath(XPATH_LIST_ALL_LEAGUES)
     leagues = WebDriverWait(list_div,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, LEAGUES_CLASSNAME)))
+    global LEAGUE_AMOUNT
+    if(LEAGUE_AMOUNT == -1):
+        LEAGUE_AMOUNT = len(leagues)
     for i,league in enumerate(leagues[:LEAGUE_AMOUNT]):
         try:
             open_league(league,button=league.find_elements(By.XPATH,".//*")[0])
@@ -92,11 +95,11 @@ def get_all_leagues_data():
             for subleague in subleagues[1:]:
                 open_league(subleague,button=subleague)
         except Exception as e: 
-            print(e)
+            print("something went wrong")
         try: 
             get_events_data(league)
         except Exception as e:
-            print(e)
+            print("something went wrong")
     print_info("all leagues shown")
 
 def open_league(league,button):
