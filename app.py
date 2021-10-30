@@ -1,47 +1,68 @@
 from flask import Flask
-
-#import libraries
+from flask import jsonify
+from flask import make_response #import libraries
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import Select
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.relative_locator import locate_with
 import time
 import pandas as pd
+import datetime
 import pickle
 import logging
-import json
+from json import JSONEncoder
+
+from flask import json
 import os
 import atexit
 from apscheduler.schedulers.background import BackgroundScheduler
 
-
+class EventEncoder(JSONEncoder):
+        def default(self, o):
+            return o.__dict__
 app = Flask(__name__)
+app.json_encoder = EventEncoder
 
 ##PATHS
-
+LEAGUE_AMOUNT = 5
 CHROMEDRIVER_PATH = r"chromedriver.exe"
-os.environ["PATH"] += CHROMEDRIVER_PATH
-
+os.environ['PATH'] += CHROMEDRIVER_PATH
 UNITBET_PATH_F = r"resources/sport_paths.json"
 XPATH_COOKIEBANNER = '//*[@id="CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll"]'
 LEAGUES_CLASSNAME = '_086a2'
 EVENTS_CLASSNAME = '_0dfcf'
 SUBLEAGUES_CLASS_NAME = '_086a2'
 TEAMS_CLASS_NAME = 'fe78a'
+ODD_CLASS_NAME = 'c93b8'
 XPATH_LIST_ALL_LEAGUES = '//*[@id="rightPanel"]/div[3]/div/div/div/div/div/div/div[2]/div[1]/div/div[5]'
 ##OPTIONS
 HEADLESS_DISPLAY = False
 
+all_events = []
+driver = None
+class Event:
+    threeway_odds = []
+    overunder_odds = []
+    country = ""
+    league = ""
+    firstTeam = ""
+    lastTeam = ""
+
+
 def init_driver():
-    options = Options()
-    options.headless = HEADLESS_DISPLAY
-    return webdriver.Chrome(options = options)
+    options = webdriver.ChromeOptions()
+    options.add_argument("start-maximized")
+    if HEADLESS_DISPLAY:
+        options.add_argument("--headless")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option('useAutomationExtension', False)
+    return webdriver.Chrome(options=options)
 
 def init_paths():
     return json.load(open(UNITBET_PATH_F))
-
 
 def delete_cookiebanner():
     #wait for and delete cookie banner
@@ -61,143 +82,113 @@ def print_info(text):
 def print_error(text):
     print("[ERROR] " + text)
 
-def show_all_leagues():
+def get_all_leagues_data():
     list_div = driver.find_element_by_xpath(XPATH_LIST_ALL_LEAGUES)
     leagues = WebDriverWait(list_div,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, LEAGUES_CLASSNAME)))
-    for i,league in enumerate(leagues[0:4]):
-       button = league.find_elements_by_xpath(".//*")[0]
-       button.click()
-       subleagues = league.find_elements_by_class_name(SUBLEAGUES_CLASS_NAME)
-       for subleague in subleagues[1:]:
-           subleague.click()
-
-       # button = league.find_elements_by_xpath(".//*")[0]
-        
-        #try:
-        #    button.click() 
-        #    
-        #    for subleague in subleagues:
-        #        if (len(subleague.text) < 50):
-        #            button = subleague.find_elements_by_xpath(".//*")[0]
-        #            button.click()
-        #            
-        #    
-        #except Exception as e:
-        #    print(e)
+    for i,league in enumerate(leagues[:LEAGUE_AMOUNT]):
+        try:
+            open_league(league,button=league.find_elements(By.XPATH,".//*")[0])
+            subleagues = league.find_elements(By.CLASS_NAME,SUBLEAGUES_CLASS_NAME)
+            for subleague in subleagues[1:]:
+                open_league(subleague,button=subleague)
+        except Exception as e: 
+            print(e)
+        try: 
+            get_events_data(league)
+        except Exception as e:
+            print(e)
     print_info("all leagues shown")
 
-def get_all_events():
+def open_league(league,button):
+    old_len = len(league.text)
+    button.click()
+    if(old_len > len(league.text)):
+        button.click()
+
+def get_events_data(league):
+    country = league.text.split("\n")[0]
     try:
-        events = WebDriverWait(driver,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, EVENTS_CLASSNAME)))
-        print_info("amount of games: " + str(len(events)))
-        for index,event in enumerate(events):
-            print_info("event number: " + str(index))
-            teams = WebDriverWait(event,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME,TEAMS_CLASS_NAME)))
-            games.append(teams[0].text)
-            print("game: ",teams[0].text.replace('\r\n', ' - ').replace('\n', ' - '))
-            print()
-            # odds = WebDriverWait(event,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, 'c93b8')))
-            odds = event.find_elements_by_class_name('c93b8')
-            if(not(len(odds) > 1 )):
-                print("no 1x2")
-                x12.append("/")
-                over_under.append("/")
-                continue
-            div_3w = odds[0]
-            
-
-            
-            way3 = WebDriverWait(div_3w,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, '_2fe2a')))
-            odd = ""
-            for res in way3:
-                if(res.text):
-                    odd += res.text + " "
-                else:
-                    odd += "/ "
-            odd = odd[:-1]
-            x12.append(odd)
-
-
-            if(not(len(odds) > 1 )):
-                print("no over under")
-                over_under.append("/")
-                continue
-            div_ou = odds[1]
-            ou_odd = WebDriverWait(div_ou,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, '_2fe2a')))
-            overunder = ""
-            for i,odd in enumerate(ou_odd):
-                if i == 0:
-                    span = WebDriverWait(odd,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, '_139cc')))
-                    overunder += span[0].text + " "
-                odd_number = WebDriverWait(odd,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, '_1a584')))
-                overunder += odd_number[0].text + " "
-            overunder = overunder[:-1]
-            over_under.append(overunder)   
+        selenium_events = WebDriverWait(league,5).until(EC.presence_of_all_elements_located((By.CLASS_NAME, EVENTS_CLASSNAME)))
+        for index,selenium_event in enumerate(selenium_events):
+            event = ConvertSeleniumEventToEvent(selenium_event,country)
+            all_events.append(event)
     except Exception as e:
         print(e)
-    
-    
-    #7 #unlimited columns
-    pd.set_option('display.max_rows', 5000)
-    pd.set_option('display.max_columns', 5000)
-    pd.set_option('display.width', 1000)
+    return
 
-    #Storing lists within dictionary
-    dict_gambling = {'Games': games,'Over/Under': over_under, '3-way': x12}
-    #Presenting data in dataframe
-    df_unibet = pd.DataFrame.from_dict(dict_gambling)
-    df_unibet.to_csv("df_unibet.csv")
-    #clean leading and trailing whitespaces of all odds
-    df_unibet = df_unibet.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+def ConvertSeleniumEventToEvent(selenium_event,country):
+    event =  Event()
+    teams = get_teams(selenium_event)
+    event.firstTeam = teams[0]
+    event.lastTeam = teams[1]
+    event.country = country
+    leagueText = driver.find_element(locate_with(By.CLASS_NAME, "_78e25").above(selenium_event)).text
+    odds = get_event_odds(selenium_event)
+    event.three_way_odds = odds[0]
+    event.overunder_odds = odds[1]
+    event.league = leagueText
+    date_event_text = driver.find_element(locate_with(By.TAG_NAME, "time").above(selenium_event)).text.split("\n")[0]
+    if("Vandaag" in date_event_text):
+        event.timestamp = datetime.date.today().strftime("%d/%m/%Y")
+    else:
+        event.timestamp = (datetime.date.today() + datetime.timedelta(days=1)).strftime("%d/%m/%Y")
 
-    
-    print(df_unibet)
+    return event
 
-    print("done")
+def get_teams(event):
+    teams = event.find_elements(By.CLASS_NAME,TEAMS_CLASS_NAME)
+    return teams[0].text.replace('\r\n', '-').replace('\n', '-').split("-")
 
-print_info("init driver..")
-driver = init_driver()
-driver.maximize_window()
-print_info("driver initialized")
+def get_event_odds(event):
+    odds = event.find_elements(By.CLASS_NAME,ODD_CLASS_NAME)
+    #if(len(odds < 2)):
+    #    games.pop()
+    three_way_odds = odds[0].text.split('\n')
+    over_under_odds = odds[1].text.split('\n')
+    return [three_way_odds, over_under_odds]
 
-UNIBET_PATHS = init_paths()
-driver.get(UNIBET_PATHS["football"])
+def convert_events_to_json():
+    jsonArray = []
+    for event in all_events:
+        jsonArray.append((event.__dict__))
+    return jsonArray
 
-print_info("deleting delete_cookiebanner")
-delete_cookiebanner()
+def get_data():
+    print_info("init driver..")
+    global driver 
+    driver = init_driver()
+    driver.maximize_window()
+    print_info("driver initialized")
 
-print_info("showing all leagues")
-show_all_leagues()
-#Initialize your storage
-games = []
-x12 = []
-btts = []
-over_under = []
-odds_events = []
+    UNIBET_PATHS = init_paths()
+    driver.get(UNIBET_PATHS["football"])
 
-print_info("get all events")
-get_all_events()
+    print_info("deleting delete_cookiebanner")
+    delete_cookiebanner()
 
-#Initialize your storage
-games = []
-x12 = []
-btts = []
-over_under = []
-odds_events = []
+    print_info("get all leagues")
+    get_all_leagues_data()
 
 
+    print_info("convert events to json")
+
+    events_inJson = convert_events_to_json()
+
+    print_info("done!")
+    driver.quit()
+    return all_events
 
 @app.route("/")
 def home():
-    return "{'status': 'UP'}"
+    return jsonify(status="UP")
 
 @app.route("/hello/<name>")
 def hello_there(name):
     return name
 
-
-# scheduler = BackgroundScheduler()
-# scheduler.add_job(func=print_date_time, trigger="interval", seconds=5)
-# scheduler.start()
-# # Shut down the scheduler when exiting the app
-# atexit.register(lambda: scheduler.shutdown())
+@app.route("/getData")
+def return_data():
+    global all_events
+    events = get_data()
+    print(events)
+    return make_response(jsonify(events = events))
